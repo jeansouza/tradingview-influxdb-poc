@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TradingView InfluxDB POC</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <!-- Chart.js Library -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+</head>
+<body>
+  <header>
+    <h1>TradingView InfluxDB POC</h1>
+    <div class="controls">
+      <div class="control-group">
+        <label for="symbol">Symbol:</label>
+        <select id="symbol">
+          <option value="BTCUSD" selected>BTC/USD</option>
+          <option value="ETHUSD">ETH/USD</option>
+          <option value="LTCUSD">LTC/USD</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label for="resolution">Timeframe:</label>
+        <select id="resolution">
+          <option value="1M">1 Minute</option>
+          <option value="5M" selected>5 Minutes</option>
+          <option value="15M">15 Minutes</option>
+          <option value="1H">1 Hour</option>
+          <option value="4H">4 Hours</option>
+          <option value="1D">1 Day</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label for="range">Date Range:</label>
+        <select id="range">
+          <option value="1h">Last Hour</option>
+          <option value="6h">Last 6 Hours</option>
+          <option value="1d">Last Day</option>
+          <option value="7d">Last Week</option>
+          <option value="30d">Last Month</option>
+          <option value="90d">Last 3 Months</option>
+          <option value="180d">Last 6 Months</option>
+          <option value="365d">Last Year</option>
+          <option value="all" selected>All Data (Since 2022)</option>
+          <option value="custom">Custom Date Range</option>
+        </select>
+      </div>
+      <button id="refresh-btn">Refresh Data</button>
+      
+      <!-- Date Filter Container (initially hidden, will be shown when "Custom Date Range" is selected) -->
+      <div id="date-filter-container" class="date-filter-container" style="display: none;">
+        <div class="control-group">
+          <label for="start-date">Start:</label>
+          <input type="datetime-local" id="start-date" value="2022-01-01T00:00">
+        </div>
+        <div class="control-group">
+          <label for="end-date">End:</label>
+          <input type="datetime-local" id="end-date" value="2022-01-02T00:00">
+        </div>
+        <button id="apply-date-filter" class="date-filter-btn">Apply</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="chart-container">
+      <div id="chart"></div>
+    </div>
+
+    <div class="data-panel">
+      <div class="panel-header">
+        <h2>Data Management</h2>
+      </div>
+      <div class="panel-content">
+        <div class="action-card">
+          <h3>Generate Test Data</h3>
+          <p>Generate fake trades with 2-second intervals starting from 2022.</p>
+          <div class="form-group">
+            <label for="gen-symbol">Symbol:</label>
+            <select id="gen-symbol">
+              <option value="BTCUSD" selected>BTC/USD</option>
+              <option value="ETHUSD">ETH/USD</option>
+              <option value="LTCUSD">LTC/USD</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="gen-count">Count:</label>
+            <input type="number" id="gen-count" value="100000" min="1000" max="1000000000">
+          </div>
+          <button id="generate-btn">Generate Trades</button>
+          <div id="generation-status" class="status-box"></div>
+        </div>
+
+        <div class="action-card">
+          <h3>Add Single Trade</h3>
+          <div class="form-group">
+            <label for="trade-symbol">Symbol:</label>
+            <select id="trade-symbol">
+              <option value="BTCUSD" selected>BTC/USD</option>
+              <option value="ETHUSD">ETH/USD</option>
+              <option value="LTCUSD">LTC/USD</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="trade-side">Side:</label>
+            <select id="trade-side">
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="trade-price">Price:</label>
+            <input type="number" id="trade-price" value="30000" step="0.01">
+          </div>
+          <div class="form-group">
+            <label for="trade-amount">Amount:</label>
+            <input type="number" id="trade-amount" value="1" step="0.001">
+          </div>
+          <button id="add-trade-btn">Add Trade</button>
+          <div id="add-trade-status" class="status-box"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <p>TradingView InfluxDB POC - Created for demonstration purposes</p>
+  </footer>
+
+  <script src="js/chart.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

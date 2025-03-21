@@ -1,0 +1,35 @@
+{
+  "name": "tradingview-influxdb-poc",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "start:high-memory": "node --max-old-space-size=8192 start-server.js",
+    "dev:high-memory": "nodemon --max-old-space-size=8192 start-server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jeansouza/tradingview-influxdb-poc.git"
+  },
+  "keywords": [],
+  "author": "Jean Souza - jeancfsouza@gmail.com",
+  "license": "GPL-3.0",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/jeansouza/tradingview-influxdb-poc/issues"
+  },
+  "homepage": "https://github.com/jeansouza/tradingview-influxdb-poc#readme",
+  "dependencies": {
+    "@influxdata/influxdb-client": "^1.35.0",
+    "@influxdata/influxdb-client-apis": "^1.35.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
