@@ -14,7 +14,18 @@ async function countAllTrades() {
   console.log('Using bucket:', bucket);
 
   // Create InfluxDB client
-  const influxDB = new InfluxDB({ url, token });
+  const influxDB = new InfluxDB({
+    url,
+    token,
+    timeout: 120000, // 120 seconds timeout (increased from 60s)
+    transportOptions: {
+      maxRetries: 15, // Increased from 10
+      retryJitter: 500,
+      minRetryDelay: 1000,
+      maxRetryDelay: 20000, // Increased from 15000
+      retryOnTimeout: true
+    }
+  });
   const queryApi = influxDB.getQueryApi(org);
 
   // Most efficient query to count all trades
