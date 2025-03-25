@@ -72,8 +72,16 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     
+    console.log(`Applying custom date range: ${startDate.toISOString()} to ${endDate.toISOString()}`);
+    
+    // Set the range to custom first
+    rangeSelect.value = 'custom';
+    
     // Set custom date range
     chartManager.setCustomDateRange(startDate, endDate);
+    
+    // Show the date filter container
+    dateFilterContainer.style.display = 'flex';
   });
 
   // Generate fake trades
@@ -207,12 +215,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   
-  // Force range to 'all' on page load to use the fixed date range (2022-01-01)
+  // Set initial custom date range to the full year of 2022
+  const initialStart = new Date('2022-01-01T00:00:00Z');
+  const initialEnd = new Date('2022-12-31T23:59:59Z');
+  chartManager.customDateRange = { start: initialStart, end: initialEnd };
+  
+  // Force range to 'all' on page load to use the full year range
   rangeSelect.value = 'all';
   chartManager.setRange('all');
-  
-  // Set initial custom date range to 2022-01-01 to 2022-01-02
-  const initialStart = new Date('2022-01-01T00:00:00Z');
-  const initialEnd = new Date('2022-01-02T00:00:00Z');
-  chartManager.customDateRange = { start: initialStart, end: initialEnd };
 });
