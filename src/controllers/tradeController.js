@@ -419,7 +419,7 @@ const generateFakeTrades = async (req, res) => {
   }
 };
 
-// Get OHLC data for charting
+// Get OHLC data for charting - using pre-downsampled data
 const getOHLC = async (req, res) => {
   try {
     const { symbol, start, end, resolution } = req.query;
@@ -430,79 +430,411 @@ const getOHLC = async (req, res) => {
 
     console.log(`Generating OHLC data for ${symbol} from ${start} to ${end} with resolution ${resolution}`);
 
-    // Validate date range to prevent timeouts
+    // Parse dates and calculate time range
     const startDate = new Date(start);
     const endDate = new Date(end);
     const timeRangeMs = endDate.getTime() - startDate.getTime();
-    const maxRangeMs = 30 * 24 * 60 * 60 * 1000; // 30 days max
+    const dateRangeDays = timeRangeMs / (24 * 60 * 60 * 1000);
     
-    if (timeRangeMs > maxRangeMs) {
-      console.warn(`Date range too large (${timeRangeMs}ms). Limiting to ${maxRangeMs}ms.`);
-      // Adjust the start date to limit the range
-      const newStartDate = new Date(endDate.getTime() - maxRangeMs);
-      console.log(`Adjusted start date from ${startDate.toISOString()} to ${newStartDate.toISOString()}`);
-      startDate.setTime(newStartDate.getTime());
+    console.log(`Date range for OHLC: ${timeRangeMs}ms (${dateRangeDays.toFixed(2)} days)`);
+
+    // Map the requested resolution to the closest available downsampled resolution
+    // This is critical for performance - we use pre-downsampled data instead of calculating on the fly
+    const resolutionMapping = {
+      '1M': '1m',
+      '5M': '5m',
+      '15M': '15m',
+      '30M': '15m', // Use 15m for 30m requests
+      '1H': '1h',
+      '2H': '1h',  // Use 1h for 2h requests
+      '4H': '4h',
+      '6H': '4h',  // Use 4h for 6h requests
+      '12H': '4h', // Use 4h for 12h requests
+      '1D': '1d',
+      'D': '1d'
+    };
+
+    // Get the appropriate downsampled measurement
+    let downsampledResolution = resolutionMapping[resolution.toUpperCase()];
+    
+    // If no direct mapping, choose the best available resolution based on date range
+    if (!downsampledResolution) {
+      if (dateRangeDays > 180) {
+        downsampledResolution = '1d';
+      } else if (dateRangeDays > 30) {
+        downsampledResolution = '4h';
+      } else if (dateRangeDays > 7) {
+        downsampledResolution = '1h';
+      } else if (dateRangeDays > 1) {
+        downsampledResolution = '15m';
+      } else {
+        downsampledResolution = '5m';
+      }
+      console.log(`No direct mapping for resolution ${resolution}, using ${downsampledResolution} based on date range`);
     }
 
-    const resolutionMs = parseResolutionToMs(resolution);
-    const windowPeriod = `${resolutionMs / 1000}s`;
+    // For very large date ranges, force a larger resolution to improve performance
+    if (dateRangeDays > 365 && downsampledResolution !== '1d') {
+      console.log(`Date range is over a year, forcing 1d resolution instead of ${downsampledResolution}`);
+      downsampledResolution = '1d';
+    } else if (dateRangeDays > 90 && ['1m', '5m'].includes(downsampledResolution)) {
+      console.log(`Date range is over 90 days, forcing 1h resolution instead of ${downsampledResolution}`);
+      downsampledResolution = '1h';
+    } else if (dateRangeDays > 30 && downsampledResolution === '1m') {
+      console.log(`Date range is over 30 days, forcing 15m resolution instead of ${downsampledResolution}`);
+      downsampledResolution = '15m';
+    }
 
-    console.log(`Using window period: ${windowPeriod}`);
+    console.log(`Using downsampled resolution: ${downsampledResolution}`);
+
+    // Set a reasonable limit on the number of data points to return
+    const MAX_DATA_POINTS = 5000;
+    
+    // Calculate if we need to further downsample the data
+    const resolutionMs = parseResolutionToMs(resolution);
+    const expectedDataPoints = timeRangeMs / resolutionMs;
+    
+    console.log(`Expected data points at ${resolution} resolution: ~${Math.ceil(expectedDataPoints)}`);
+    
+    let aggregateWindow = null;
+    
+    // If we expect too many data points, add an additional aggregation step
+    if (expectedDataPoints > MAX_DATA_POINTS) {
+      const aggregateFactor = Math.ceil(expectedDataPoints / MAX_DATA_POINTS);
+      aggregateWindow = `${Math.ceil(aggregateFactor * resolutionMs / 1000)}s`;
+      console.log(`Too many data points, adding aggregation window of ${aggregateWindow} to limit to ~${MAX_DATA_POINTS} points`);
+    }
 
     try {
+      // Query the pre-downsampled data from the appropriate measurement
+      // This is much more efficient than calculating OHLC from raw trade data
+      let fluxQuery = `
+        // Query pre-downsampled data from the appropriate measurement
+        from(bucket: "${config.bucket}")
+          |> range(start: ${startDate.toISOString()}, stop: ${endDate.toISOString()})
+          |> filter(fn: (r) => r._measurement == "trade_ohlc_${downsampledResolution}")
+          |> filter(fn: (r) => r.symbol == "${symbol}")
+      `;
+      
+      // If we need to further aggregate the data to reduce the number of points
+      if (aggregateWindow) {
+        // For large datasets, use a simpler approach with separate queries for each field
+        // This avoids complex nested operations that can cause errors
+        
+        // Get open values (first value in each window)
+        const openQuery = `
+          from(bucket: "${config.bucket}")
+            |> range(start: ${startDate.toISOString()}, stop: ${endDate.toISOString()})
+            |> filter(fn: (r) => r._measurement == "trade_ohlc_${downsampledResolution}")
+            |> filter(fn: (r) => r.symbol == "${symbol}")
+            |> filter(fn: (r) => r._field == "open")
+            |> aggregateWindow(every: ${aggregateWindow}, fn: first, createEmpty: false)
+        `;
+        
+        // Get high values (max value in each window)
+        const highQuery = `
+          from(bucket: "${config.bucket}")
+            |> range(start: ${startDate.toISOString()}, stop: ${endDate.toISOString()})
+            |> filter(fn: (r) => r._measurement == "trade_ohlc_${downsampledResolution}")
+            |> filter(fn: (r) => r.symbol == "${symbol}")
+            |> filter(fn: (r) => r._field == "high")
+            |> aggregateWindow(every: ${aggregateWindow}, fn: max, createEmpty: false)
+        `;
+        
+        // Get low values (min value in each window)
+        const lowQuery = `
+          from(bucket: "${config.bucket}")
+            |> range(start: ${startDate.toISOString()}, stop: ${endDate.toISOString()})
+            |> filter(fn: (r) => r._measurement == "trade_ohlc_${downsampledResolution}")
+            |> filter(fn: (r) => r.symbol == "${symbol}")
+            |> filter(fn: (r) => r._field == "low")
+            |> aggregateWindow(every: ${aggregateWindow}, fn: min, createEmpty: false)
+        `;
+        
+        // Get close values (last value in each window)
+        const closeQuery = `
+          from(bucket: "${config.bucket}")
+            |> range(start: ${startDate.toISOString()}, stop: ${endDate.toISOString()})
+            |> filter(fn: (r) => r._measurement == "trade_ohlc_${downsampledResolution}")
+            |> filter(fn: (r) => r.symbol == "${symbol}")
+            |> filter(fn: (r) => r._field == "close")
+            |> aggregateWindow(every: ${aggregateWindow}, fn: last, createEmpty: false)
+        `;
+        
+        // Get volume values (sum in each window)
+        const volumeQuery = `
+          from(bucket: "${config.bucket}")
+            |> range(start: ${startDate.toISOString()}, stop: ${endDate.toISOString()})
+            |> filter(fn: (r) => r._measurement == "trade_ohlc_${downsampledResolution}")
+            |> filter(fn: (r) => r.symbol == "${symbol}")
+            |> filter(fn: (r) => r._field == "volume")
+            |> aggregateWindow(every: ${aggregateWindow}, fn: sum, createEmpty: false)
+        `;
+        
+        console.log('Executing separate queries for each OHLC component');
+        
+        // Execute all queries in parallel
+        const [openRows, highRows, lowRows, closeRows, volumeRows] = await Promise.all([
+          queryApi.collectRows(openQuery),
+          queryApi.collectRows(highQuery),
+          queryApi.collectRows(lowQuery),
+          queryApi.collectRows(closeQuery),
+          queryApi.collectRows(volumeQuery)
+        ]);
+        
+        // Create a map of time to OHLC data
+        const timeMap = new Map();
+        
+        // Process open values
+        openRows.forEach(row => {
+          const time = new Date(row._time).getTime();
+          if (!timeMap.has(time)) {
+            timeMap.set(time, { time });
+          }
+          timeMap.get(time).open = row._value;
+        });
+        
+        // Process high values
+        highRows.forEach(row => {
+          const time = new Date(row._time).getTime();
+          if (!timeMap.has(time)) {
+            timeMap.set(time, { time });
+          }
+          timeMap.get(time).high = row._value;
+        });
+        
+        // Process low values
+        lowRows.forEach(row => {
+          const time = new Date(row._time).getTime();
+          if (!timeMap.has(time)) {
+            timeMap.set(time, { time });
+          }
+          timeMap.get(time).low = row._value;
+        });
+        
+        // Process close values
+        closeRows.forEach(row => {
+          const time = new Date(row._time).getTime();
+          if (!timeMap.has(time)) {
+            timeMap.set(time, { time });
+          }
+          timeMap.get(time).close = row._value;
+        });
+        
+        // Process volume values
+        volumeRows.forEach(row => {
+          const time = new Date(row._time).getTime();
+          if (!timeMap.has(time)) {
+            timeMap.set(time, { time });
+          }
+          timeMap.get(time).volume = row._value || 0;
+        });
+        
+        // Convert map to array and filter out incomplete candles
+        const result = Array.from(timeMap.values())
+          .filter(candle => 
+            candle.open !== undefined && 
+            candle.high !== undefined && 
+            candle.low !== undefined && 
+            candle.close !== undefined
+          )
+          .sort((a, b) => a.time - b.time);
+        
+        console.log(`Generated ${result.length} OHLC candles from pre-downsampled data using separate queries`);
+        return res.json(result);
+      } else {
+        // If no additional aggregation is needed, just pivot the data
+        fluxQuery += `
+          |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        `;
+        
+        console.log('Executing simple pivot query on pre-downsampled data');
+        
+        // Process the query results
+        const rows = await queryApi.collectRows(fluxQuery);
+        
+        // Process the rows
+        const ohlcData = rows
+          .filter(row => 
+            row.open !== undefined && 
+            row.high !== undefined && 
+            row.low !== undefined && 
+            row.close !== undefined
+          )
+          .map(row => ({
+            time: new Date(row._time).getTime(),
+            open: row.open,
+            high: row.high,
+            low: row.low,
+            close: row.close,
+            volume: row.volume || 0
+          }))
+          .sort((a, b) => a.time - b.time);
+        
+        console.log(`Generated ${ohlcData.length} OHLC candles from pre-downsampled data`);
+        return res.json(ohlcData);
+      }
+      
+      console.log('Executing query on pre-downsampled data');
+      
       // Set a timeout for the query
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Query timed out after 30 seconds')), 30000);
       });
       
-      // Get trades using the queryTrades function with timeout
-      const tradesPromise = queryTrades(symbol, startDate.toISOString(), endDate.toISOString());
+      // Process the query results
+      const ohlcData = [];
       
-      // Race the query against the timeout
-      const trades = await Promise.race([tradesPromise, timeoutPromise]);
-      
-      console.log(`Retrieved ${trades.length} trades for OHLC calculation`);
-
-      if (trades.length === 0) {
-        return res.json([]);
-      }
-
-      // Group trades by time bucket based on resolution
-      const ohlcMap = new Map();
-
-      trades.forEach(trade => {
-        const timestamp = new Date(trade.time).getTime();
-        const bucketTime = Math.floor(timestamp / resolutionMs) * resolutionMs;
-
-        if (!ohlcMap.has(bucketTime)) {
-          ohlcMap.set(bucketTime, {
-            time: bucketTime,
-            open: trade.price,
-            high: trade.price,
-            low: trade.price,
-            close: trade.price,
-            volume: trade.amount || 0
-          });
-        } else {
-          const candle = ohlcMap.get(bucketTime);
-          candle.high = Math.max(candle.high, trade.price);
-          candle.low = Math.min(candle.low, trade.price);
-          candle.close = trade.price;
-          candle.volume += (trade.amount || 0);
+      // Create a promise for the query execution
+      const queryPromise = new Promise(async (resolve, reject) => {
+        try {
+          // Use collectRows instead of iterateRows for better performance with large datasets
+          const rows = await queryApi.collectRows(fluxQuery);
+          
+          // Process the rows
+          for (const row of rows) {
+            // Only include candles with all required fields
+            if (row.open !== undefined && row.high !== undefined && 
+                row.low !== undefined && row.close !== undefined) {
+              ohlcData.push({
+                time: new Date(row._time).getTime(),
+                open: row.open,
+                high: row.high,
+                low: row.low,
+                close: row.close,
+                volume: row.volume || 0
+              });
+            }
+          }
+          
+          resolve(ohlcData);
+        } catch (error) {
+          reject(error);
         }
       });
-
-      // Convert map to array and sort by time
-      const ohlcData = Array.from(ohlcMap.values()).sort((a, b) => a.time - b.time);
-
-      console.log(`Generated ${ohlcData.length} OHLC candles`);
-      return res.json(ohlcData);
+      
+      // Race the query against the timeout
+      const result = await Promise.race([queryPromise, timeoutPromise]);
+      
+      // Sort by time
+      result.sort((a, b) => a.time - b.time);
+      
+      console.log(`Generated ${result.length} OHLC candles from pre-downsampled data`);
+      return res.json(result);
     } catch (error) {
-      console.error('Error generating OHLC data:', error);
-      if (error.message === 'Query timed out after 30 seconds') {
-        return res.status(504).json({ error: 'Query timed out. Try a smaller date range.' });
+      console.error('Error generating OHLC data from pre-downsampled data:', error);
+      
+      if (error.message.includes('Query timed out')) {
+        return res.status(504).json({ 
+          error: 'Query timed out. Try a smaller date range or a larger resolution.' 
+        });
       }
-      return res.status(500).json({ error: `Failed to generate OHLC data: ${error.message}` });
+      
+      // If the downsampled data query fails, try a more aggressive approach with a larger resolution
+      console.log('Query on pre-downsampled data failed, trying with a larger resolution');
+      
+      // Choose a larger resolution based on the current one
+      let largerResolution;
+      if (downsampledResolution === '1m') largerResolution = '15m';
+      else if (downsampledResolution === '5m') largerResolution = '1h';
+      else if (downsampledResolution === '15m') largerResolution = '4h';
+      else if (downsampledResolution === '1h') largerResolution = '1d';
+      else largerResolution = '1d'; // Default to daily
+      
+      console.log(`Trying with larger resolution: ${largerResolution}`);
+      
+      try {
+        // Query with the larger resolution
+        const fallbackQuery = `
+          from(bucket: "${config.bucket}")
+            |> range(start: ${startDate.toISOString()}, stop: ${endDate.toISOString()})
+            |> filter(fn: (r) => r._measurement == "trade_ohlc_${largerResolution}")
+            |> filter(fn: (r) => r.symbol == "${symbol}")
+            |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        `;
+        
+        console.log('Executing fallback query with larger resolution');
+        
+        // Set a shorter timeout for the fallback query
+        const fallbackTimeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Fallback query timed out after 15 seconds')), 15000);
+        });
+        
+        // Process the query results
+        const fallbackQueryPromise = new Promise(async (resolve, reject) => {
+          try {
+            const rows = await queryApi.collectRows(fallbackQuery);
+            
+            const ohlcData = rows
+              .filter(row => row.open !== undefined && row.high !== undefined && 
+                      row.low !== undefined && row.close !== undefined)
+              .map(row => ({
+                time: new Date(row._time).getTime(),
+                open: row.open,
+                high: row.high,
+                low: row.low,
+                close: row.close,
+                volume: row.volume || 0
+              }))
+              .sort((a, b) => a.time - b.time);
+            
+            resolve(ohlcData);
+          } catch (error) {
+            reject(error);
+          }
+        });
+        
+        // Race the fallback query against the timeout
+        const fallbackResult = await Promise.race([fallbackQueryPromise, fallbackTimeoutPromise]);
+        
+        console.log(`Generated ${fallbackResult.length} OHLC candles using fallback larger resolution`);
+        return res.json(fallbackResult);
+      } catch (fallbackError) {
+        console.error('Error in fallback query:', fallbackError);
+        
+        if (fallbackError.message.includes('timed out')) {
+          return res.status(504).json({ 
+            error: 'Query timed out even with larger resolution. Try a much smaller date range.' 
+          });
+        }
+        
+        // Last resort: try to get just a small sample of data
+        try {
+          console.log('Trying last resort: getting a limited sample of data');
+          
+          const lastResortQuery = `
+            from(bucket: "${config.bucket}")
+              |> range(start: ${startDate.toISOString()}, stop: ${endDate.toISOString()})
+              |> filter(fn: (r) => r._measurement == "trade_ohlc_1d")
+              |> filter(fn: (r) => r.symbol == "${symbol}")
+              |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+              |> limit(n: 100)
+          `;
+          
+          const sampleRows = await queryApi.collectRows(lastResortQuery);
+          
+          const sampleData = sampleRows
+            .filter(row => row.open !== undefined && row.high !== undefined && 
+                    row.low !== undefined && row.close !== undefined)
+            .map(row => ({
+              time: new Date(row._time).getTime(),
+              open: row.open,
+              high: row.high,
+              low: row.low,
+              close: row.close,
+              volume: row.volume || 0
+            }))
+            .sort((a, b) => a.time - b.time);
+          
+          console.log(`Generated ${sampleData.length} sample OHLC candles as last resort`);
+          return res.json(sampleData);
+        } catch (lastResortError) {
+          console.error('Error in last resort query:', lastResortError);
+          return res.status(500).json({ 
+            error: `Failed to generate OHLC data: The database contains too much data for the requested time range. Please use a much smaller date range or a larger resolution.` 
+          });
+        }
+      }
     }
   } catch (error) {
     console.error('Error fetching OHLC data:', error);
