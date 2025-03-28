@@ -206,9 +206,21 @@ from(bucket: "${bucket}")
   |> set(key: "_field", value: "volume")
   |> to(bucket: "${bucket}", org: "${process.env.INFLUXDB_ORG}")
 
-// For now, we'll skip writing the progress record
-// This means the task will always start from the beginning
-// But it's better than having the task fail completely
+// Write the progress record after processing this chunk
+// This ensures the task will continue from where it left off next time
+from(bucket: "${bucket}")
+  |> range(start: start_time, stop: final_end_time)
+  |> filter(fn: (r) => r._measurement == "trade")
+  |> last()
+  |> map(fn: (r) => ({
+      _time: now(),
+      _measurement: "downsampling_progress",
+      _field: "last_processed",
+      resolution: "${resolution.name}",
+      _value: string(v: final_end_time)
+    })
+  )
+  |> to(bucket: "${bucket}", org: "${process.env.INFLUXDB_ORG}")
 `;
 }
 

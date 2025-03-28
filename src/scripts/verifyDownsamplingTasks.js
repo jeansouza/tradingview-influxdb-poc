@@ -93,9 +93,10 @@ async function verifyDownsamplingTasks() {
           
           if (taskDetails && taskDetails.flux) {
             // Check if the script includes the key components of our new approach
-            const hasIncrementalProcessing = taskDetails.flux.includes('progress_data') && 
-                                            taskDetails.flux.includes('chunk_start') &&
-                                            taskDetails.flux.includes('chunk_end');
+            const hasIncrementalProcessing = taskDetails.flux.includes('downsampling_progress') && 
+                                            taskDetails.flux.includes('last_processed') &&
+                                            taskDetails.flux.includes('start_time') &&
+                                            taskDetails.flux.includes('final_end_time');
             const hasWindowAggregation = taskDetails.flux.includes('window(every:');
             const hasOHLCVFields = taskDetails.flux.includes('open') && 
                                   taskDetails.flux.includes('high') && 
