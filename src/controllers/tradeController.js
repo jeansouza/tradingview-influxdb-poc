@@ -1,6 +1,65 @@
 const { influxDB, writeApi, queryApi, config } = require('../config/influxdb');
 const { Point } = require('@influxdata/influxdb-client');
 
+// Helper function to convert resolution to InfluxDB format
+const getDownsampledResolution = (resolution) => {
+  // Map the requested resolution to the closest available downsampled resolution
+  // This is the single source of truth for resolution mapping
+  const resolutionMapping = {
+    // Numeric formats (from frontend)
+    '1': '1m',
+    '5': '5m',
+    '15': '15m',
+    '30': '15m', // Use 15m for 30m requests
+    '60': '1h',
+    '120': '1h',  // Use 1h for 2h requests
+    '240': '4h',
+    '360': '4h',  // Use 4h for 6h requests
+    '720': '4h', // Use 4h for 12h requests
+    
+    // Letter formats (uppercase)
+    'D': '1d',
+    '1D': '1d',
+    
+    // Letter formats with units (uppercase)
+    '1M': '1m',
+    '5M': '5m',
+    '15M': '15m',
+    '30M': '15m',
+    '1H': '1h',
+    '2H': '1h',
+    '4H': '4h',
+    '6H': '4h',
+    '12H': '4h',
+    
+    // Letter formats with units (lowercase)
+    '1m': '1m',
+    '5m': '5m',
+    '15m': '15m',
+    '30m': '15m',
+    '1h': '1h',
+    '2h': '1h',
+    '4h': '4h',
+    '6h': '4h',
+    '12h': '4h',
+    '1d': '1d'
+  };
+  
+  // Try direct lookup first
+  if (resolutionMapping[resolution]) {
+    return resolutionMapping[resolution];
+  }
+  
+  // Try uppercase version
+  if (resolutionMapping[resolution.toUpperCase()]) {
+    return resolutionMapping[resolution.toUpperCase()];
+  }
+  
+  // Default to 5m if no match found
+  console.log(`No direct mapping for resolution ${resolution}, defaulting to 5m`);
+  return '5m';
+};
+
 // Function to write a single trade point
 const writeTrade = async (trade) => {
   try {
@@ -438,42 +497,13 @@ const getOHLC = async (req, res) => {
     
     console.log(`Date range for OHLC: ${timeRangeMs}ms (${dateRangeDays.toFixed(2)} days)`);
 
-    // Map the requested resolution to the closest available downsampled resolution
-    // This is critical for performance - we use pre-downsampled data instead of calculating on the fly
-    const resolutionMapping = {
-      '1M': '1m',
-      '5M': '5m',
-      '15M': '15m',
-      '30M': '15m', // Use 15m for 30m requests
-      '1H': '1h',
-      '2H': '1h',  // Use 1h for 2h requests
-      '4H': '4h',
-      '6H': '4h',  // Use 4h for 6h requests
-      '12H': '4h', // Use 4h for 12h requests
-      '1D': '1d',
-      'D': '1d'
-    };
-
-    // Get the appropriate downsampled measurement
-    let downsampledResolution = resolutionMapping[resolution.toUpperCase()];
+    // Use the unified getDownsampledResolution function to get the appropriate resolution
+    let downsampledResolution = getDownsampledResolution(resolution);
     
-    // If no direct mapping, choose the best available resolution based on date range
-    if (!downsampledResolution) {
-      if (dateRangeDays > 180) {
-        downsampledResolution = '1d';
-      } else if (dateRangeDays > 30) {
-        downsampledResolution = '4h';
-      } else if (dateRangeDays > 7) {
-        downsampledResolution = '1h';
-      } else if (dateRangeDays > 1) {
-        downsampledResolution = '15m';
-      } else {
-        downsampledResolution = '5m';
-      }
-      console.log(`No direct mapping for resolution ${resolution}, using ${downsampledResolution} based on date range`);
-    }
+    console.log(`Initial downsampled resolution mapping: ${resolution} -> ${downsampledResolution}`);
 
     // For very large date ranges, force a larger resolution to improve performance
+    // This ensures we use the best fitting downsampled data based on the date range
     if (dateRangeDays > 365 && downsampledResolution !== '1d') {
       console.log(`Date range is over a year, forcing 1d resolution instead of ${downsampledResolution}`);
       downsampledResolution = '1d';
@@ -862,9 +892,37 @@ function parseResolutionToMs(resolution) {
   }
 }
 
+// Get available symbols
+const getSymbols = (req, res) => {
+  // For this POC, we'll just return our predefined symbols
+  const symbols = [
+    {
+      symbol: 'BTCUSD',
+      description: 'BTC/USD',
+      exchange: 'InfluxDB',
+      type: 'crypto'
+    },
+    {
+      symbol: 'ETHUSD',
+      description: 'ETH/USD',
+      exchange: 'InfluxDB',
+      type: 'crypto'
+    },
+    {
+      symbol: 'LTCUSD',
+      description: 'LTC/USD',
+      exchange: 'InfluxDB',
+      type: 'crypto'
+    }
+  ];
+  
+  res.json(symbols);
+};
+
 module.exports = {
   getTrades,
   createTrade,
   generateFakeTrades,
-  getOHLC
+  getOHLC,
+  getSymbols
 };

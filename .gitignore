@@ -134,3 +134,7 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# TradingView Charting Library (requires license)
+public/charting_library/
+public/datafeeds/
