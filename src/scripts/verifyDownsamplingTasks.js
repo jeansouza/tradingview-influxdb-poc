@@ -4,7 +4,7 @@ const { TasksAPI } = require('@influxdata/influxdb-client-apis');
 
 /**
  * This script verifies that the downsampling tasks are properly set up and running.
- * It checks the task configurations, runs, and downsampling progress.
+ * It checks the task configurations, runs, downsampling progress, and task status.
  * 
  * Usage:
  * node src/scripts/verifyDownsamplingTasks.js
@@ -16,12 +16,14 @@ async function verifyDownsamplingTasks() {
     url: process.env.INFLUXDB_URL,
     token: process.env.INFLUXDB_TOKEN,
     org: process.env.INFLUXDB_ORG,
-    bucket: process.env.INFLUXDB_BUCKET
+    bucket: process.env.INFLUXDB_BUCKET,
+    statusBucket: 'task_status' // New bucket for storing task status
   };
 
   console.log('Connecting to InfluxDB at:', config.url);
   console.log('Using organization:', config.org);
   console.log('Using bucket:', config.bucket);
+  console.log('Using status bucket:', config.statusBucket);
 
   // Create InfluxDB client
   const influxDB = new InfluxDB({
@@ -37,12 +39,12 @@ async function verifyDownsamplingTasks() {
 
   // Define resolutions for downsampling
   const resolutions = [
-    { name: '1m', seconds: 60, flux: '1m', every: '5m', chunkDays: 1 },
-    { name: '5m', seconds: 300, flux: '5m', every: '15m', chunkDays: 3 },
-    { name: '15m', seconds: 900, flux: '15m', every: '30m', chunkDays: 7 },
-    { name: '1h', seconds: 3600, flux: '1h', every: '1h', chunkDays: 14 },
-    { name: '4h', seconds: 14400, flux: '4h', every: '4h', chunkDays: 30 },
-    { name: '1d', seconds: 86400, flux: '1d', every: '6h', chunkDays: 90 }
+    { name: '1m', seconds: 60, flux: '1m', every: '1m', chunkDays: 1 },
+    { name: '5m', seconds: 300, flux: '5m', every: '1m', chunkDays: 3 },
+    { name: '15m', seconds: 900, flux: '15m', every: '1m', chunkDays: 7 },
+    { name: '1h', seconds: 3600, flux: '1h', every: '1m', chunkDays: 14 },
+    { name: '4h', seconds: 14400, flux: '4h', every: '1m', chunkDays: 30 },
+    { name: '1d', seconds: 86400, flux: '1d', every: '1m', chunkDays: 90 }
   ];
 
   try {
@@ -103,9 +105,18 @@ async function verifyDownsamplingTasks() {
                                   taskDetails.flux.includes('low') && 
                                   taskDetails.flux.includes('close') && 
                                   taskDetails.flux.includes('volume');
+            const hasOverlapPrevention = taskDetails.flux.includes('task_status') && 
+                                        taskDetails.flux.includes('is_running');
             
             if (hasIncrementalProcessing && hasWindowAggregation && hasOHLCVFields) {
               console.log(`   - ✅ Task script is using the optimized format`);
+              
+              if (hasOverlapPrevention) {
+                console.log(`   - ✅ Task script includes overlap prevention mechanism`);
+              } else {
+                console.log(`   - ⚠️ Task script does not include overlap prevention`);
+                console.log(`     Run setupDownsamplingTasks.js again to update the task.`);
+              }
             } else {
               console.log(`   - ⚠️ Task script may not be using the latest optimized format`);
               console.log(`     Run setupDownsamplingTasks.js again to update the task.`);
@@ -118,6 +129,53 @@ async function verifyDownsamplingTasks() {
         console.error(`❌ Task '${taskName}' not found`);
         console.log(`   Run setupDownsamplingTasks.js to create it.`);
       }
+    }
+    
+    // Check task status in the status bucket
+    console.log('\nChecking task status:');
+    
+    try {
+      // Query to get the latest status for each task
+      const statusQuery = `
+        from(bucket: "${config.statusBucket}")
+          |> range(start: -1h)
+          |> filter(fn: (r) => r._measurement == "task_status")
+          |> filter(fn: (r) => r._field == "status")
+          |> group(columns: ["task_name"])
+          |> last()
+      `;
+      
+      // Execute the query
+      const statusResult = await queryApi.collectRows(statusQuery);
+      
+      if (statusResult.length > 0) {
+        console.log('Current status of downsampling tasks:');
+        
+        // Create a map of task name to status
+        const statusMap = new Map();
+        statusResult.forEach(row => {
+          statusMap.set(row.task_name, row._value);
+        });
+        
+        // Display status for each resolution
+        for (const resolution of resolutions) {
+          const taskName = `Downsample_Trades_${resolution.name}`;
+          const status = statusMap.get(taskName);
+          if (status) {
+            console.log(`   - ${taskName}: ${status}`);
+            
+            if (status === 'running') {
+              console.log(`     ⚠️ Task is currently running. New runs will be skipped until it completes.`);
+            }
+          } else {
+            console.log(`   - ${taskName}: No status recorded yet`);
+          }
+        }
+      } else {
+        console.log('No task status records found yet. Tasks may not have run with the new overlap prevention mechanism.');
+      }
+    } catch (error) {
+      console.error('Error checking task status:', error.message);
     }
     
     // Check for downsampling progress
@@ -282,7 +340,7 @@ async function verifyDownsamplingTasks() {
           |> filter(fn: (r) => r._measurement == "task_logs")
           |> filter(fn: (r) => r._field == "message")
           |> sort(columns: ["_time"], desc: true)
-          |> limit(n: 10)
+          |> limit(n: 20)
       `;
       
       const logsResult = await queryApi.collectRows(logsQuery);
@@ -291,6 +349,18 @@ async function verifyDownsamplingTasks() {
         console.log('Recent task logs:');
         for (const log of logsResult) {
           console.log(`   - [${new Date(log._time).toISOString()}] ${log.task || 'unknown'}: ${log._value}`);
+        }
+        
+        // Check for overlap prevention logs
+        const overlapLogs = logsResult.filter(log => log._value.includes('already running') || log._value.includes('skipping this run'));
+        
+        if (overlapLogs.length > 0) {
+          console.log('\n✅ Found logs indicating overlap prevention is working:');
+          for (const log of overlapLogs) {
+            console.log(`   - [${new Date(log._time).toISOString()}] ${log.task}: ${log._value}`);
+          }
+        } else {
+          console.log('\nNo overlap prevention logs found yet. This is normal if tasks haven\'t overlapped.');
         }
       } else {
         console.log('No recent task logs found.');
@@ -304,11 +374,12 @@ async function verifyDownsamplingTasks() {
     console.log('   node src/scripts/runDownsamplingTask.js Downsample_Trades_<resolution>');
     console.log('2. Each task processes data in chunks for better performance.');
     console.log('   It may take multiple runs to process the entire history.');
-    console.log('3. If no downsampled data is found, check if you have trade data:');
+    console.log('3. Tasks now include overlap prevention to ensure only one instance runs at a time.');
+    console.log('4. If no downsampled data is found, check if you have trade data:');
     console.log('   node src/scripts/countTrades.js');
-    console.log('4. Generate trade data if needed:');
+    console.log('5. Generate trade data if needed:');
     console.log('   curl "http://localhost:3000/api/trades/generate?symbol=BTCUSD&count=100000"');
-    console.log('5. To monitor progress, run this verification script periodically.');
+    
   } catch (error) {
     console.error('Error verifying downsampling tasks:', error);
   }
