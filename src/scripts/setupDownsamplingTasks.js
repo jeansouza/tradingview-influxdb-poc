@@ -6,7 +6,7 @@ const { TasksAPI } = require('@influxdata/influxdb-client-apis');
  * This script sets up InfluxDB tasks to downsample trade data into different time resolutions.
  * It creates pre-aggregated OHLC (Open, High, Low, Close) data for each resolution.
  * 
- * Resolutions: 1m, 5m, 15m, 1h, 4h, 1d
+ * Resolutions: 1s, 1m, 5m, 15m, 45m, 1h, 3h, 4h, 1d, 1w, 1M
  * 
  * Each task will:
  * 1. Check if the task is already running (using task_status bucket)
@@ -51,12 +51,17 @@ async function setupDownsamplingTasks() {
 
   // Define resolutions for downsampling - all running every 1 minute
   const resolutions = [
+    { name: '1s', seconds: 1, flux: '1s', every: '1m', chunkDays: 0.5 },     // Run every minute, process 0.5 day chunks
     { name: '1m', seconds: 60, flux: '1m', every: '1m', chunkDays: 1 },      // Run every minute, process 1 day chunks
     { name: '5m', seconds: 300, flux: '5m', every: '1m', chunkDays: 3 },     // Run every minute, process 3 day chunks
     { name: '15m', seconds: 900, flux: '15m', every: '1m', chunkDays: 7 },   // Run every minute, process 7 day chunks
+    { name: '45m', seconds: 2700, flux: '45m', every: '1m', chunkDays: 10 }, // Run every minute, process 10 day chunks
     { name: '1h', seconds: 3600, flux: '1h', every: '1m', chunkDays: 14 },   // Run every minute, process 14 day chunks
+    { name: '3h', seconds: 10800, flux: '3h', every: '1m', chunkDays: 20 },  // Run every minute, process 20 day chunks
     { name: '4h', seconds: 14400, flux: '4h', every: '1m', chunkDays: 30 },  // Run every minute, process 30 day chunks
-    { name: '1d', seconds: 86400, flux: '1d', every: '1m', chunkDays: 90 }   // Run every minute, process 90 day chunks
+    { name: '1d', seconds: 86400, flux: '1d', every: '1m', chunkDays: 90 },  // Run every minute, process 90 day chunks
+    { name: '1w', seconds: 604800, flux: '1w', every: '1m', chunkDays: 180 },// Run every minute, process 180 day chunks
+    { name: '1M', seconds: 2592000, flux: '1M', every: '1m', chunkDays: 365 }// Run every minute, process 365 day chunks
   ];
 
   // Get organization ID

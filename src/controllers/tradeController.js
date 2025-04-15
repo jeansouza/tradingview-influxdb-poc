@@ -11,8 +11,10 @@ const getDownsampledResolution = (resolution) => {
     '5': '5m',
     '15': '15m',
     '30': '15m', // Use 15m for 30m requests
+    '45': '45m', // 45 minute resolution
     '60': '1h',
     '120': '1h',  // Use 1h for 2h requests
+    '180': '3h',  // 3 hour resolution
     '240': '4h',
     '360': '4h',  // Use 4h for 6h requests
     '720': '4h', // Use 4h for 12h requests
@@ -20,29 +22,52 @@ const getDownsampledResolution = (resolution) => {
     // Letter formats (uppercase)
     'D': '1d',
     '1D': '1d',
+    'W': '1w',
+    '1W': '1w',
+    'MO': '1M',
+    '1MO': '1M',
     
     // Letter formats with units (uppercase)
+    '1S': '1s',
     '1M': '1m',
     '5M': '5m',
     '15M': '15m',
     '30M': '15m',
+    '45M': '45m',
+    '60M': '1h',
+    '120M': '1h',
+    '180M': '3h',
+    '240M': '4h',
     '1H': '1h',
     '2H': '1h',
+    '3H': '3h',
     '4H': '4h',
     '6H': '4h',
     '12H': '4h',
+    '1D': '1d',
+    '1W': '1w',
+    '1MO': '1M',
     
     // Letter formats with units (lowercase)
+    '1s': '1s',
     '1m': '1m',
     '5m': '5m',
     '15m': '15m',
     '30m': '15m',
+    '45m': '45m',
+    '60m': '1h',
+    '120m': '1h',
+    '180m': '3h',
+    '240m': '4h',
     '1h': '1h',
     '2h': '1h',
+    '3h': '3h',
     '4h': '4h',
     '6h': '4h',
     '12h': '4h',
-    '1d': '1d'
+    '1d': '1d',
+    '1w': '1w',
+    '1M': '1M'
   };
   
   // Try direct lookup first
@@ -874,18 +899,34 @@ const getOHLC = async (req, res) => {
 
 // Helper function to convert resolution string to milliseconds
 function parseResolutionToMs(resolution) {
+  // Handle special case for month (MO) to avoid confusion with minutes (M)
+  if (resolution.endsWith('MO')) {
+    const value = parseInt(resolution.slice(0, -2));
+    return value * 30 * 24 * 60 * 60 * 1000; // Approximate month as 30 days
+  }
+
   const unit = resolution.slice(-1);
   const value = parseInt(resolution.slice(0, -1));
 
   switch (unit) {
     case 'S': // Seconds
+    case 's':
       return value * 1000;
     case 'M': // Minutes
+    case 'm':
       return value * 60 * 1000;
     case 'H': // Hours
+    case 'h':
       return value * 60 * 60 * 1000;
     case 'D': // Days
+    case 'd':
       return value * 24 * 60 * 60 * 1000;
+    case 'W': // Weeks
+    case 'w':
+      return value * 7 * 24 * 60 * 60 * 1000;
+    case 'O': // Months (if using 'MO' format but only 'O' is the last character)
+      console.log('Warning: Unexpected resolution format. Use "MO" for months.');
+      return value * 30 * 24 * 60 * 60 * 1000;
     default:
       // If no unit specified, assume minutes
       return parseInt(resolution) * 60 * 1000;
