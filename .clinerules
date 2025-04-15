@@ -1,0 +1,119 @@
+# .clinerules - Project Intelligence for TradingView InfluxDB POC
+
+## Project Patterns
+
+### Resolution Handling
+
+- The project uses a unified resolution mapping system in `tradeController.js` via the `getDownsampledResolution` function
+- When working with resolutions, always use this mapping function rather than hardcoding resolution values
+- The system supports both numeric formats ('1', '5', '15') and letter formats ('1m', '5m', '1h', 'D')
+- Some resolutions map to others (e.g., '30m' → '15m', '2h' → '1h') to optimize storage
+
+### InfluxDB Task Management
+
+- Downsampling tasks are created and managed in `setupDownsamplingTasks.js`
+- Tasks use a chunk-based approach with different chunk sizes based on resolution
+- Task status is tracked in a separate 'task_status' bucket to prevent overlapping runs
+- Progress is tracked in the main bucket using the 'downsampling_progress' measurement
+
+### Memory Management
+
+- For large data operations, use batch processing with appropriate batch sizes
+- When generating data, use generator functions to avoid storing large arrays in memory
+- For very large datasets, use the high-memory mode with `npm run dev:high-memory` or `npm run start:high-memory`
+- Create dedicated write APIs for each batch to ensure proper flushing and closing
+
+### Error Handling
+
+- Implement fallback strategies for query timeouts (e.g., try larger resolutions)
+- Use try/catch blocks around all async operations
+- Set appropriate timeouts for queries based on expected data volume
+- Log detailed error information for debugging
+
+## Workflow Preferences
+
+### Development Setup
+
+- Always run InfluxDB before starting the application
+- Use `npm run dev` for normal development
+- Use `npm run dev:high-memory` when working with large datasets
+- Check that environment variables are properly set in `.env` file
+
+### Testing Data
+
+- Generate test data using the `/api/trades/generate` endpoint
+- Start with smaller datasets (e.g., 10,000 trades) for quick testing
+- Use the symbol parameter to test different symbols (BTCUSD, ETHUSD, LTCUSD)
+- For performance testing, generate at least 1M records
+
+### Downsampling Tasks
+
+- Run tasks manually using `node src/scripts/runDownsamplingTask.js <task_name>`
+- Check task status with `node src/scripts/verifyDownsamplingTasks.js`
+- Run tasks one at a time for large datasets to avoid overloading InfluxDB
+- Use the `--force` flag to run a task even if it's already running
+
+### Frontend Testing
+
+- Test with different symbols and timeframes
+- Test custom date range selection with various date ranges
+- Check for proper handling of very large date ranges
+- Verify that charts render correctly with different resolutions
+
+## Known Challenges
+
+### Query Performance
+
+- Queries over very large date ranges may timeout
+- The system automatically selects larger resolutions for large date ranges
+- If a query times out, try reducing the date range or increasing the resolution
+- For extremely large datasets, consider using the 1d resolution
+
+### Memory Usage
+
+- Generating millions of trades can cause memory issues
+- The application uses batch processing to mitigate this
+- For very large datasets (>10M records), use the high-memory mode
+- Monitor memory usage during large data operations
+
+### Task Execution
+
+- InfluxDB tasks run in the InfluxDB server environment
+- Limited visibility into task execution details
+- Use the custom status tracking to monitor progress
+- Tasks may take a long time to process large datasets
+
+### TradingView Library
+
+- Requires commercial license from TradingView
+- Cannot be distributed with the application
+- Use the setup script to install after obtaining license
+- Some advanced features may require additional configuration
+
+## Critical Implementation Paths
+
+### Data Flow
+
+1. Trade data is ingested through API endpoints
+2. Data is written to InfluxDB in batches
+3. Downsampling tasks process raw data into OHLC at multiple resolutions
+4. Frontend requests data for specific symbol, time range, and resolution
+5. Backend selects appropriate pre-downsampled data
+6. TradingView library renders the chart
+
+### Resolution Selection Logic
+
+1. Frontend requests data with specific resolution
+2. `getDownsampledResolution` maps to available downsampled resolution
+3. System checks date range and may force larger resolution for performance
+4. Query is executed against the appropriate downsampled measurement
+5. If query fails, system tries fallback with larger resolution
+
+### Incremental Processing
+
+1. Task checks if it's already running via status bucket
+2. If not running, marks itself as running
+3. Gets the latest progress record to determine start time
+4. Processes data in chunks based on resolution-specific chunk size
+5. Updates progress record after processing each chunk
+6. Marks itself as completed when done
