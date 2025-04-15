@@ -3,81 +3,92 @@ const { Point } = require('@influxdata/influxdb-client');
 
 // Helper function to convert resolution to InfluxDB format
 const getDownsampledResolution = (resolution) => {
-  // Map the requested resolution to the closest available downsampled resolution
-  // This is the single source of truth for resolution mapping
-  const resolutionMapping = {
+  // Normalize the resolution string to lowercase for consistent processing
+  const normalizedResolution = resolution.toString().toLowerCase();
+  
+  // Core mapping of standard resolutions to their downsampled equivalents
+  const coreMapping = {
+    // Seconds
+    '1': '1s', // 1 second resolution
+    
+    // Minutes
+    '60': '1m',
+    '300': '5m',
+    '900': '15m',
+    '1800': '15m', // Use 15m for 30m requests
+    '2700': '45m',
+    
+    // Hours
+    '3600': '1h',
+    '7200': '1h', // Use 1h for 2h requests
+    '10800': '3h',
+    '14400': '4h',
+    '21600': '4h', // Use 4h for 6h requests
+    '43200': '4h', // Use 4h for 12h requests
+    
+    // Days and other periods
+    '86400': '1d', // 1 day
+    '604800': '1w', // 1 week
+    '2592000': '1M', // 1 month (approx 30 days)
+    
     // Numeric formats (from frontend)
-    '1': '1m',
+    '1': '1s', // 1 second
     '5': '5m',
     '15': '15m',
     '30': '15m', // Use 15m for 30m requests
-    '45': '45m', // 45 minute resolution
+    '45': '45m',
     '60': '1h',
-    '120': '1h',  // Use 1h for 2h requests
-    '180': '3h',  // 3 hour resolution
+    '120': '1h', // Use 1h for 2h requests
+    '180': '3h',
     '240': '4h',
-    '360': '4h',  // Use 4h for 6h requests
+    '360': '4h', // Use 4h for 6h requests
     '720': '4h', // Use 4h for 12h requests
     
-    // Letter formats (uppercase)
-    'D': '1d',
-    '1D': '1d',
-    'W': '1w',
-    '1W': '1w',
-    'MO': '1M',
-    '1MO': '1M',
-    
-    // Letter formats with units (uppercase)
-    '1S': '1s',
-    '1M': '1m',
-    '5M': '5m',
-    '15M': '15m',
-    '30M': '15m',
-    '45M': '45m',
-    '60M': '1h',
-    '120M': '1h',
-    '180M': '3h',
-    '240M': '4h',
-    '1H': '1h',
-    '2H': '1h',
-    '3H': '3h',
-    '4H': '4h',
-    '6H': '4h',
-    '12H': '4h',
-    '1D': '1d',
-    '1W': '1w',
-    '1MO': '1M',
-    
-    // Letter formats with units (lowercase)
-    '1s': '1s',
-    '1m': '1m',
-    '5m': '5m',
-    '15m': '15m',
-    '30m': '15m',
-    '45m': '45m',
-    '60m': '1h',
-    '120m': '1h',
-    '180m': '3h',
-    '240m': '4h',
-    '1h': '1h',
-    '2h': '1h',
-    '3h': '3h',
-    '4h': '4h',
-    '6h': '4h',
-    '12h': '4h',
-    '1d': '1d',
-    '1w': '1w',
-    '1M': '1M'
+    // Days and other periods
+    'd': '1d',
+    'w': '1w',
+    'mo': '1M'
   };
   
-  // Try direct lookup first
-  if (resolutionMapping[resolution]) {
-    return resolutionMapping[resolution];
+  // Handle numeric resolutions (e.g., '1', '5', '15')
+  if (/^\d+$/.test(normalizedResolution)) {
+    return coreMapping[normalizedResolution] || '5m';
   }
   
-  // Try uppercase version
-  if (resolutionMapping[resolution.toUpperCase()]) {
-    return resolutionMapping[resolution.toUpperCase()];
+  // Handle letter formats without units (e.g., 'D', 'W')
+  if (/^[dwmo]$/.test(normalizedResolution)) {
+    return coreMapping[normalizedResolution];
+  }
+  
+  // Handle formats with number and unit (e.g., '1m', '1h', '1d')
+  const match = normalizedResolution.match(/^(\d+)([smhdwmo]+)$/);
+  if (match) {
+    const [, value, unit] = match;
+    
+    // Direct mapping for standard units
+    if (unit === 's') return '1s';
+    if (unit === 'm') {
+      // Map minute-based resolutions
+      if (value === '1') return '1m';
+      if (value === '5') return '5m';
+      if (value === '15') return '15m';
+      if (value === '30') return '15m';
+      if (value === '45') return '45m';
+      if (value === '60' || value === '120') return '1h';
+      if (value === '180') return '3h';
+      if (value === '240') return '4h';
+    }
+    if (unit === 'h') {
+      // Map hour-based resolutions
+      if (value === '1') return '1h';
+      if (value === '2') return '1h';
+      if (value === '3') return '3h';
+      if (value === '4') return '4h';
+      if (value === '6' || value === '12') return '4h';
+    }
+    if (unit === 'd') return '1d';
+    if (unit === 'w') return '1w';
+    if (unit === 'mo') return '1M';
   }
   
   // Default to 5m if no match found
@@ -88,8 +99,6 @@ const getDownsampledResolution = (resolution) => {
 // Function to write a single trade point
 const writeTrade = async (trade) => {
   try {
-    console.log('Writing single trade:', trade.symbol, trade.price);
-
     // Create a dedicated write API for this single trade to ensure proper flushing
     const singleTradeWriteApi = influxDB.getWriteApi(config.org, config.bucket, 'ns', {
       defaultTags: { source: 'tradingview-poc' },
@@ -112,14 +121,11 @@ const writeTrade = async (trade) => {
 
     singleTradeWriteApi.writePoint(point);
 
-    console.log('Flushing single trade...');
+    // Flush and close the write API
     await singleTradeWriteApi.flush();
-    console.log('Single trade flushed successfully');
-    
-    // Close the write API
     await singleTradeWriteApi.close();
-    console.log('Single trade write API closed successfully');
-
+    
+    console.log(`Trade written successfully: ${trade.symbol} at ${trade.price}`);
     return Promise.resolve();
   } catch (error) {
     console.error('Error writing single trade:', error);
@@ -138,49 +144,19 @@ const writeTrades = async (trades) => {
 
   // Use larger batch sizes for better performance
   const BATCH_SIZE = 10000;
+  const totalBatches = Math.ceil(trades.length / BATCH_SIZE);
 
   try {
     // Split trades into smaller batches
     for (let i = 0; i < trades.length; i += BATCH_SIZE) {
+      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
       const batch = trades.slice(i, i + BATCH_SIZE);
-      console.log(`Processing batch ${i/BATCH_SIZE + 1} of ${Math.ceil(trades.length/BATCH_SIZE)} (${batch.length} trades)`);
+      console.log(`Processing batch ${batchNumber} of ${totalBatches} (${batch.length} trades)`);
 
-      // Create a new write API for each batch to ensure proper flushing and closing
-      const batchWriteApi = influxDB.getWriteApi(config.org, config.bucket, 'ns', {
-        defaultTags: { source: 'tradingview-poc' },
-        maxRetries: 15, // Increased from 10
-        retryJitter: 500,
-        minRetryDelay: 1000,
-        maxRetryDelay: 20000, // Increased from 15000
-        exponentialBase: 2,
-        maxRetryTime: 600000, // 10 minutes (increased from 5 minutes)
-        maxBufferLines: 2000, // Increased from 1000
-        flushInterval: 1000 // Reduced from 2000 ms
-      });
-
-      // Add points to the write API
-      batch.forEach(trade => {
-        const point = new Point('trade')
-          .tag('symbol', trade.symbol)
-          .tag('side', trade.side)
-          .floatField('price', trade.price)
-          .floatField('amount', trade.amount)
-          .timestamp(trade.timestamp || new Date());
-
-        batchWriteApi.writePoint(point);
-      });
-
-      console.log(`Batch ${i/BATCH_SIZE + 1}: Points added to write buffer, flushing...`);
-
-      // Flush the write API
-      await batchWriteApi.flush();
-      console.log(`Batch ${i/BATCH_SIZE + 1}: Flush completed successfully`);
-
-      // Close the write API
-      await batchWriteApi.close();
-      console.log(`Batch ${i/BATCH_SIZE + 1}: Write API closed successfully`);
-
-      // No delay between batches for faster processing
+      // Process this batch
+      await processBatch(batch, batchNumber, totalBatches);
+      
+      // Log progress
       if (i + BATCH_SIZE < trades.length) {
         console.log('Processing next batch...');
       }
@@ -194,10 +170,58 @@ const writeTrades = async (trades) => {
   }
 };
 
+// Helper function to process a single batch of trades
+async function processBatch(batch, batchNumber, totalBatches) {
+  // Create a new write API for this batch to ensure proper flushing and closing
+  const batchWriteApi = influxDB.getWriteApi(config.org, config.bucket, 'ns', {
+    defaultTags: { source: 'tradingview-poc' },
+    maxRetries: 15,
+    retryJitter: 500,
+    minRetryDelay: 1000,
+    maxRetryDelay: 20000,
+    exponentialBase: 2,
+    maxRetryTime: 600000, // 10 minutes
+    maxBufferLines: 2000,
+    flushInterval: 1000 // 1 second
+  });
+
+  try {
+    // Add points to the write API
+    batch.forEach(trade => {
+      const point = new Point('trade')
+        .tag('symbol', trade.symbol)
+        .tag('side', trade.side)
+        .floatField('price', trade.price)
+        .floatField('amount', trade.amount)
+        .timestamp(trade.timestamp || new Date());
+
+      batchWriteApi.writePoint(point);
+    });
+
+    console.log(`Batch ${batchNumber}: Points added to write buffer, flushing...`);
+
+    // Flush and close the write API
+    await batchWriteApi.flush();
+    console.log(`Batch ${batchNumber}: Flush completed successfully`);
+    
+    await batchWriteApi.close();
+    console.log(`Batch ${batchNumber}: Write API closed successfully`);
+    
+    return Promise.resolve();
+  } catch (error) {
+    // Make sure to close the API even if there's an error
+    try {
+      await batchWriteApi.close();
+    } catch (closeError) {
+      console.error(`Error closing write API for batch ${batchNumber}:`, closeError);
+    }
+    
+    throw error; // Re-throw the original error
+  }
+}
+
 // Function to query trades by symbol and time range
 const queryTrades = async (symbol, start, end) => {
-  console.log(`Querying trades for ${symbol} from ${start} to ${end}`);
-
   // Query to fetch trades
   const fluxQuery = `
     from(bucket: "${config.bucket}")
@@ -207,8 +231,6 @@ const queryTrades = async (symbol, start, end) => {
       |> pivot(rowKey:["_time", "symbol", "side"], columnKey: ["_field"], valueColumn: "_value")
       |> drop(columns: ["_start", "_stop", "_measurement"])
   `;
-
-  console.log('Executing query:', fluxQuery);
 
   const result = [];
   try {
@@ -223,7 +245,7 @@ const queryTrades = async (symbol, start, end) => {
       });
     }
 
-    console.log(`Query returned ${result.length} trades`);
+    console.log(`Query returned ${result.length} trades for ${symbol}`);
     return result;
   } catch (error) {
     console.error('Error querying trades:', error);
@@ -705,77 +727,47 @@ const getOHLC = async (req, res) => {
         
         console.log('Executing simple pivot query on pre-downsampled data');
         
-        // Process the query results
-        const rows = await queryApi.collectRows(fluxQuery);
+        // Set a timeout for the query
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Query timed out after 30 seconds')), 30000);
+        });
         
-        // Process the rows
-        const ohlcData = rows
-          .filter(row => 
-            row.open !== undefined && 
-            row.high !== undefined && 
-            row.low !== undefined && 
-            row.close !== undefined
-          )
-          .map(row => ({
-            time: new Date(row._time).getTime(),
-            open: row.open,
-            high: row.high,
-            low: row.low,
-            close: row.close,
-            volume: row.volume || 0
-          }))
-          .sort((a, b) => a.time - b.time);
-        
-        console.log(`Generated ${ohlcData.length} OHLC candles from pre-downsampled data`);
-        return res.json(ohlcData);
-      }
-      
-      console.log('Executing query on pre-downsampled data');
-      
-      // Set a timeout for the query
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Query timed out after 30 seconds')), 30000);
-      });
-      
-      // Process the query results
-      const ohlcData = [];
-      
-      // Create a promise for the query execution
-      const queryPromise = new Promise(async (resolve, reject) => {
-        try {
-          // Use collectRows instead of iterateRows for better performance with large datasets
-          const rows = await queryApi.collectRows(fluxQuery);
-          
-          // Process the rows
-          for (const row of rows) {
-            // Only include candles with all required fields
-            if (row.open !== undefined && row.high !== undefined && 
-                row.low !== undefined && row.close !== undefined) {
-              ohlcData.push({
+        // Create a promise for the query execution
+        const queryPromise = new Promise(async (resolve, reject) => {
+          try {
+            // Use collectRows instead of iterateRows for better performance with large datasets
+            const rows = await queryApi.collectRows(fluxQuery);
+            
+            // Process the rows
+            const ohlcData = rows
+              .filter(row => 
+                row.open !== undefined && 
+                row.high !== undefined && 
+                row.low !== undefined && 
+                row.close !== undefined
+              )
+              .map(row => ({
                 time: new Date(row._time).getTime(),
                 open: row.open,
                 high: row.high,
                 low: row.low,
                 close: row.close,
                 volume: row.volume || 0
-              });
-            }
+              }))
+              .sort((a, b) => a.time - b.time);
+            
+            resolve(ohlcData);
+          } catch (error) {
+            reject(error);
           }
-          
-          resolve(ohlcData);
-        } catch (error) {
-          reject(error);
-        }
-      });
-      
-      // Race the query against the timeout
-      const result = await Promise.race([queryPromise, timeoutPromise]);
-      
-      // Sort by time
-      result.sort((a, b) => a.time - b.time);
-      
-      console.log(`Generated ${result.length} OHLC candles from pre-downsampled data`);
-      return res.json(result);
+        });
+        
+        // Race the query against the timeout
+        const result = await Promise.race([queryPromise, timeoutPromise]);
+        
+        console.log(`Generated ${result.length} OHLC candles from pre-downsampled data`);
+        return res.json(result);
+      }
     } catch (error) {
       console.error('Error generating OHLC data from pre-downsampled data:', error);
       
@@ -899,38 +891,73 @@ const getOHLC = async (req, res) => {
 
 // Helper function to convert resolution string to milliseconds
 function parseResolutionToMs(resolution) {
+  // Normalize the resolution string to lowercase for consistent processing
+  const normalizedResolution = resolution.toString().toLowerCase();
+  
+  // Handle special cases for numeric resolutions
+  if (/^\d+$/.test(normalizedResolution)) {
+    const numericValue = parseInt(normalizedResolution);
+    
+    // Map common numeric resolutions to their millisecond values
+    switch (numericValue) {
+      case 1: return 1 * 1000; // 1 second
+      case 5: return 5 * 60 * 1000; // 5 minutes
+      case 15: return 15 * 60 * 1000; // 15 minutes
+      case 30: return 30 * 60 * 1000; // 30 minutes
+      case 45: return 45 * 60 * 1000; // 45 minutes
+      case 60: return 60 * 60 * 1000; // 1 hour
+      case 120: return 120 * 60 * 1000; // 2 hours
+      case 180: return 180 * 60 * 1000; // 3 hours
+      case 240: return 240 * 60 * 1000; // 4 hours
+      case 360: return 360 * 60 * 1000; // 6 hours
+      case 720: return 720 * 60 * 1000; // 12 hours
+      default: return numericValue * 60 * 1000; // Default to minutes
+    }
+  }
+  
   // Handle special case for month (MO) to avoid confusion with minutes (M)
-  if (resolution.endsWith('MO')) {
-    const value = parseInt(resolution.slice(0, -2));
+  if (normalizedResolution.endsWith('mo')) {
+    const value = parseInt(normalizedResolution.slice(0, -2)) || 1;
     return value * 30 * 24 * 60 * 60 * 1000; // Approximate month as 30 days
   }
-
-  const unit = resolution.slice(-1);
-  const value = parseInt(resolution.slice(0, -1));
-
-  switch (unit) {
-    case 'S': // Seconds
-    case 's':
-      return value * 1000;
-    case 'M': // Minutes
-    case 'm':
-      return value * 60 * 1000;
-    case 'H': // Hours
-    case 'h':
-      return value * 60 * 60 * 1000;
-    case 'D': // Days
-    case 'd':
-      return value * 24 * 60 * 60 * 1000;
-    case 'W': // Weeks
-    case 'w':
-      return value * 7 * 24 * 60 * 60 * 1000;
-    case 'O': // Months (if using 'MO' format but only 'O' is the last character)
-      console.log('Warning: Unexpected resolution format. Use "MO" for months.');
-      return value * 30 * 24 * 60 * 60 * 1000;
-    default:
-      // If no unit specified, assume minutes
-      return parseInt(resolution) * 60 * 1000;
+  
+  // Handle formats with number and unit (e.g., '1m', '1h', '1d')
+  const match = normalizedResolution.match(/^(\d+)([smhdw])$/);
+  if (match) {
+    const value = parseInt(match[1]);
+    const unit = match[2];
+    
+    switch (unit) {
+      case 's': // Seconds
+        return value * 1000;
+      case 'm': // Minutes
+        return value * 60 * 1000;
+      case 'h': // Hours
+        return value * 60 * 60 * 1000;
+      case 'd': // Days
+        return value * 24 * 60 * 60 * 1000;
+      case 'w': // Weeks
+        return value * 7 * 24 * 60 * 60 * 1000;
+    }
   }
+  
+  // Handle letter formats without units (e.g., 'D', 'W')
+  switch (normalizedResolution) {
+    case 'd':
+      return 1 * 24 * 60 * 60 * 1000; // 1 day
+    case 'w':
+      return 1 * 7 * 24 * 60 * 60 * 1000; // 1 week
+    case 's':
+      return 1 * 1000; // 1 second
+    case 'm':
+      return 1 * 60 * 1000; // 1 minute
+    case 'h':
+      return 1 * 60 * 60 * 1000; // 1 hour
+  }
+  
+  // Default to 5 minutes if no match found
+  console.log(`Warning: Could not parse resolution "${resolution}", defaulting to 5 minutes`);
+  return 5 * 60 * 1000;
 }
 
 // Get available symbols
