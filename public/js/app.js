@@ -610,36 +610,55 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Custom range button clicked');
     
     // Get the date and time values
-    const startDate = startDateInput.value;
+    let startDate = startDateInput.value;
     const startTime = startTimeInput.value;
-    const endDate = endDateInput.value;
+    let endDate = endDateInput.value;
     const endTime = endTimeInput.value;
     
     console.log(`Custom range selected: ${startDate} ${startTime} to ${endDate} ${endTime}`);
     
     // Create ISO date strings
     try {
-      // Parse the date values correctly
-      // The date format might be DD/MM/YYYY or YYYY-MM-DD depending on the browser locale
-      let startDateObj, endDateObj;
+      // Clean up the date values if they contain unexpected characters
+      startDate = startDate.replace(/[^0-9-]/g, '');
+      endDate = endDate.replace(/[^0-9-]/g, '');
       
-      // Handle different date formats
-      if (startDate.includes('/')) {
-        // Format: DD/MM/YYYY
-        const [day, month, year] = startDate.split('/');
-        startDateObj = new Date(`${year}-${month}-${day}T${startTime}:00`);
-      } else {
-        // Format: YYYY-MM-DD
-        startDateObj = new Date(`${startDate}T${startTime}:00`);
+      // Ensure dates are in YYYY-MM-DD format
+      if (startDate.length === 8 && !startDate.includes('-')) {
+        // Format: YYYYMMDD
+        startDate = `${startDate.substring(0, 4)}-${startDate.substring(4, 6)}-${startDate.substring(6, 8)}`;
+      } else if (startDate.length === 10 && startDate.includes('/')) {
+        // Format: MM/DD/YYYY or DD/MM/YYYY
+        const parts = startDate.split('/');
+        if (parts.length === 3) {
+          // Assume MM/DD/YYYY for simplicity
+          startDate = `${parts[2]}-${parts[0]}-${parts[1]}`;
+        }
       }
       
-      if (endDate.includes('/')) {
-        // Format: DD/MM/YYYY
-        const [day, month, year] = endDate.split('/');
-        endDateObj = new Date(`${year}-${month}-${day}T${endTime}:00`);
-      } else {
-        // Format: YYYY-MM-DD
-        endDateObj = new Date(`${endDate}T${endTime}:00`);
+      if (endDate.length === 8 && !endDate.includes('-')) {
+        // Format: YYYYMMDD
+        endDate = `${endDate.substring(0, 4)}-${endDate.substring(4, 6)}-${endDate.substring(6, 8)}`;
+      } else if (endDate.length === 10 && endDate.includes('/')) {
+        // Format: MM/DD/YYYY or DD/MM/YYYY
+        const parts = endDate.split('/');
+        if (parts.length === 3) {
+          // Assume MM/DD/YYYY for simplicity
+          endDate = `${parts[2]}-${parts[0]}-${parts[1]}`;
+        }
+      }
+      
+      console.log(`Cleaned dates: ${startDate} to ${endDate}`);
+      
+      // Parse the date values
+      const startDateObj = new Date(`${startDate}T${startTime}:00`);
+      const endDateObj = new Date(`${endDate}T${endTime}:00`);
+      
+      // Check if dates are valid
+      if (isNaN(startDateObj.getTime()) || isNaN(endDateObj.getTime())) {
+        console.error('Invalid date format after cleaning:', { startDate, endDate });
+        alert('Please enter valid dates in YYYY-MM-DD format');
+        throw new Error('Invalid date format');
       }
       
       const start = startDateObj.toISOString();
