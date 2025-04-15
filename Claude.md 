@@ -1,0 +1,26 @@
+# TradingView InfluxDB POC Guidelines
+
+## Persona-Based Task Assignment
+
+The POC uses a persona-based approach for task assignment. When initiating a task, specify which persona should handle it by including one of the following tags in your prompt:
+
+```
+@SeniorDeveloper: [Task description]
+```
+or
+```
+@ProjectManager: [Task description]
+```
+
+### Available Personas
+
+- **Senior Node.js Developer**: Technical implementation, code optimization, debugging, and architecture
+**If you are a @SeniorDeveloper read this:**
+  - [Detailed persona definition](/personas/senior_nodejs_developer.md)
+
+- **Project Manager**: Documentation, task planning, progress tracking, and process coordination
+**If you are a @ProjectManager read this:**  
+
+  - [Detailed persona definition](/personas/project_manager.md)
+
+If no persona is specified, Claude will determine the most appropriate persona based on the task description.
