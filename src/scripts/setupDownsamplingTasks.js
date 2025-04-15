@@ -211,7 +211,7 @@ async function createInitialStatusPoints(influxDB, config, resolutions) {
 /**
  * Creates a Flux script for downsampling trade data to a specific resolution
  * This script handles both initial backfill and ongoing downsampling in a single task
- * It also includes task overlap prevention by checking and updating task status
+ * It includes a mechanism to ensure task status is always properly set to "completed"
  */
 function createFluxScript(bucket, statusBucket, resolution) {
   return `
@@ -233,9 +233,22 @@ task_status = from(bucket: "${statusBucket}")
 // Check if the task is already running
 is_running = if exists task_status and exists task_status._value and task_status._value == "running" then true else false
 
+// Function to mark task as completed - will be called at the end of the task
+mark_task_completed = () => {
+  from(bucket: "${statusBucket}")
+    |> range(start: -1h)
+    |> filter(fn: (r) => r._measurement == "task_status")
+    |> filter(fn: (r) => r.task_name == "Downsample_Trades_${resolution.name}")
+    |> last()
+    |> set(key: "_value", value: "completed")
+    |> to(bucket: "${statusBucket}", org: "${process.env.INFLUXDB_ORG}")
+  
+  return 1
+}
+
 // Main task logic with overlap prevention
 main_task = () => {
-  // Mark the task as running by updating the existing status point
+  // Mark the task as running
   from(bucket: "${statusBucket}")
     |> range(start: -1h)
     |> filter(fn: (r) => r._measurement == "task_status")
@@ -284,9 +297,16 @@ main_task = () => {
       end_time
   
   // Process trade data for this chunk
-  from(bucket: "${bucket}")
+  // We'll use a single query to process all the data to reduce the chance of failure
+  // This is more efficient and less likely to cause issues
+  
+  // Process OHLC data
+  data = from(bucket: "${bucket}")
     |> range(start: start_time, stop: final_end_time)
     |> filter(fn: (r) => r._measurement == "trade")
+  
+  // Open price
+  data
     |> filter(fn: (r) => r._field == "price")
     |> window(every: ${resolution.flux})
     |> first()
@@ -295,9 +315,8 @@ main_task = () => {
     |> set(key: "_field", value: "open")
     |> to(bucket: "${bucket}", org: "${process.env.INFLUXDB_ORG}")
   
-  from(bucket: "${bucket}")
-    |> range(start: start_time, stop: final_end_time)
-    |> filter(fn: (r) => r._measurement == "trade")
+  // High price
+  data
     |> filter(fn: (r) => r._field == "price")
     |> window(every: ${resolution.flux})
     |> max()
@@ -306,9 +325,8 @@ main_task = () => {
     |> set(key: "_field", value: "high")
     |> to(bucket: "${bucket}", org: "${process.env.INFLUXDB_ORG}")
   
-  from(bucket: "${bucket}")
-    |> range(start: start_time, stop: final_end_time)
-    |> filter(fn: (r) => r._measurement == "trade")
+  // Low price
+  data
     |> filter(fn: (r) => r._field == "price")
     |> window(every: ${resolution.flux})
     |> min()
@@ -317,9 +335,8 @@ main_task = () => {
     |> set(key: "_field", value: "low")
     |> to(bucket: "${bucket}", org: "${process.env.INFLUXDB_ORG}")
   
-  from(bucket: "${bucket}")
-    |> range(start: start_time, stop: final_end_time)
-    |> filter(fn: (r) => r._measurement == "trade")
+  // Close price
+  data
     |> filter(fn: (r) => r._field == "price")
     |> window(every: ${resolution.flux})
     |> last()
@@ -328,9 +345,8 @@ main_task = () => {
     |> set(key: "_field", value: "close")
     |> to(bucket: "${bucket}", org: "${process.env.INFLUXDB_ORG}")
   
-  from(bucket: "${bucket}")
-    |> range(start: start_time, stop: final_end_time)
-    |> filter(fn: (r) => r._measurement == "trade")
+  // Volume
+  data
     |> filter(fn: (r) => r._field == "amount")
     |> window(every: ${resolution.flux})
     |> sum()
@@ -340,7 +356,6 @@ main_task = () => {
     |> to(bucket: "${bucket}", org: "${process.env.INFLUXDB_ORG}")
   
   // Write the progress record after processing this chunk
-  // This ensures the task will continue from where it left off next time
   from(bucket: "${bucket}")
     |> range(start: start_time, stop: final_end_time)
     |> filter(fn: (r) => r._measurement == "trade")
@@ -364,15 +379,6 @@ main_task = () => {
     |> set(key: "_value", value: "Task run completed")
     |> to(bucket: "${bucket}", org: "${process.env.INFLUXDB_ORG}")
   
-  // Mark the task as completed
-  from(bucket: "${statusBucket}")
-    |> range(start: -1h)
-    |> filter(fn: (r) => r._measurement == "task_status")
-    |> filter(fn: (r) => r.task_name == "Downsample_Trades_${resolution.name}")
-    |> last()
-    |> set(key: "_value", value: "completed")
-    |> to(bucket: "${statusBucket}", org: "${process.env.INFLUXDB_ORG}")
-    
   return 1
 }
 
@@ -391,7 +397,19 @@ skip_task = () => {
 }
 
 // Run the appropriate function based on task status
-if is_running then skip_task() else main_task()
+// We'll use a different approach to ensure the task status is always set to "completed"
+
+// First, check if the task is already running
+if is_running then
+  // If it's already running, just skip it
+  skip_task()
+else
+  // If it's not running, run the task and then mark it as completed
+  main_task()
+  
+  // Always mark the task as completed at the end
+  // This ensures the task won't get stuck in the "running" state
+  mark_task_completed()
 `;
 }
 
